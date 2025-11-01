@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>City Car 3D TNL AKASH 007</title>
+    <style>
+        /* CSS (V6 jaisa hi, plus new button style) */
+        body { margin: 0; overflow: hidden; background-color: #f0f0f0; font-family: sans-serif; }
+        canvas { display: block; }
+        #loading-message { /* ... V6 style ... */ position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 1.2em; color: #333; background-color: rgba(255, 255, 255, 0.8); padding: 10px 20px; border-radius: 5px; z-index: 10; }
+        .control-cluster { /* ... V6 style ... */ position: absolute; bottom: 25px; display: flex; gap: 20px; z-index: 5; opacity: 0.75; user-select: none; -webkit-user-select: none; -moz-user-select: none; -ms-user-select: none; }
+        #left-controls { /* ... V6 style ... */ left: 25px; flex-direction: row; align-items: center; }
+        #right-controls { /* ... V6 style ... */ right: 25px; flex-direction: column; align-items: center; }
+        .control-button { /* ... V6 style ... */ width: 65px; height: 65px; background-color: rgba(0, 0, 0, 0.6); color: white; border: none; border-radius: 50%; font-size: 24px; font-weight: bold; display: flex; justify-content: center; align-items: center; cursor: pointer; box-shadow: 0 3px 6px rgba(0,0,0,0.3); transition: background-color 0.1s ease; }
+        .control-button:active { background-color: rgba(50, 50, 50, 0.9); }
+        #accelerator::before { content: '▲'; } #reverse::before { content: 'R'; }
+        #left::before { content: '◀'; } #right::before { content: '▶'; }
+
+        /* --- NEW Camera Toggle Button Style --- */
+        #camera-toggle-btn {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            padding: 8px 12px;
+            background-color: rgba(0, 0, 0, 0.6);
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            z-index: 10; /* Ensure it's above canvas */
+             opacity: 0.8;
+             transition: background-color 0.1s ease;
+        }
+         #camera-toggle-btn:active {
+             background-color: rgba(50, 50, 50, 0.9);
+         }
+    </style>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+          "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        }
+      }
+    </script>
+</head>
+<body>
+    <div id="loading-message">Loading Assets...</div>
+
+    <!-- Camera Toggle Button -->
+    <button id="camera-toggle-btn">Close Cam</button>
+
+    <!-- Control Clusters (V6 jaisa hi) -->
+    <div id="left-controls" class="control-cluster">
+        <button id="left" class="control-button"></button>
+        <button id="right" class="control-button"></button>
+    </div>
+    <div id="right-controls" class="control-cluster">
+        <button id="accelerator" class="control-button"></button>
+        <button id="reverse" class="control-button"></button>
+    </div>
+
+    <div id="container"></div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+        let scene, camera, renderer, clock, raycaster;
+        let cityModel, carModel;
+        let loadingMessage = document.getElementById('loading-message');
+
+        // Audio Variables (V6 jaisa hi)
+        let listener, engineSound, audioLoader;
+        let soundLoaded = false;
+        const minPlaybackRate = 0.6, maxPlaybackRate = 2.2, maxVolume = 0.7;
+        const soundSmoothingFactor = 4.0;
+
+        // Physics Parameters (V6 jaisa hi)
+        let carSpeed = 0; let steeringAngle = 0;
+        const maxSpeed = 55.0; const maxReverseSpeed = -15.0; const acceleration = 30.0;
+        const reverseAcceleration = -20.0; const frictionCoefficient = 1.8;
+        const steeringRate = 2.5; const maxSteeringAngle = Math.PI / 5;
+        const steeringReturnRate = 4.0; const turnSensitivity = 1.0;
+        const carInitialPosition = new THREE.Vector3(0, 0.1, 10);
+
+        // Camera Parameters
+        const cameraFollowSmoothness = 5.0;
+        // --- NEW: Define multiple camera offsets ---
+        const cameraOffsetNormal = new THREE.Vector3(0, 6, -14); // Pehle wala offset
+        const cameraOffsetClose = new THREE.Vector3(0, 3.5, -8); // Nazdeek wala offset (adjust values as needed)
+        let activeCameraOffset = cameraOffsetNormal; // Shuru mein normal offset use hoga
+        let isCameraClose = false; // State variable
+
+        // Collision Parameters (V6 jaisa hi)
+        const collisionThreshold = 1.5; const collisionRayOffset = 0.5;
+        let collisionObjects = [];
+
+        // Input/Loading States (V6 jaisa hi)
+        let controls = { accelerate: false, reverse: false, turnLeft: false, turnRight: false };
+        let modelsLoaded = { city: false, car: false };
+        let assetsLoaded = false;
+
+        function checkAllModelsLoaded() { /* ... V6 jaisa hi ... */
+            if (modelsLoaded.city && modelsLoaded.car) {
+                console.log("All models loaded!");
+                 if (loadingMessage && loadingMessage.parentNode) { loadingMessage.remove(); loadingMessage = null; }
+                assetsLoaded = true;
+                if (cityModel) collisionObjects.push(cityModel);
+                setupInitialCamera();
+            }
+         }
+        function updateLoadingMessage(message) { /* ... V6 jaisa hi ... */ if (loadingMessage) { loadingMessage.textContent = message; } }
+
+        function init() {
+            clock = new THREE.Clock();
+            raycaster = new THREE.Raycaster();
+            const container = document.getElementById('container');
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0xabcdef);
+            scene.fog = new THREE.Fog(0xabcdef, 50, 300);
+
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 10, 20);
+
+            // Audio Setup (V6 jaisa hi)
+            listener = new THREE.AudioListener(); camera.add(listener);
+            engineSound = new THREE.Audio(listener); audioLoader = new THREE.AudioLoader();
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            // ... (renderer setup V6 jaisa hi) ...
+            renderer.setSize(window.innerWidth, window.innerHeight); renderer.setPixelRatio(window.devicePixelRatio); renderer.outputColorSpace = THREE.SRGBColorSpace; renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.0; renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            container.appendChild(renderer.domElement);
+
+            // Lights, Floor (V6 jaisa hi)
+            // ... (lights and floor setup) ...
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.7); scene.add(ambientLight); const directionalLight = new THREE.DirectionalLight(0xffffff, 1.8); directionalLight.position.set(50, 80, 60); directionalLight.castShadow = true; directionalLight.shadow.mapSize.width = 2048; directionalLight.shadow.mapSize.height = 2048; directionalLight.shadow.camera.near = 0.5; directionalLight.shadow.camera.far = 500; directionalLight.shadow.camera.left = -150; directionalLight.shadow.camera.right = 150; directionalLight.shadow.camera.top = 150; directionalLight.shadow.camera.bottom = -150; scene.add(directionalLight); const floorGeometry = new THREE.PlaneGeometry(400, 400); const floorMaterial = new THREE.MeshStandardMaterial({ color: 0x888888, roughness: 0.9, metalness: 0.1 }); const floor = new THREE.Mesh(floorGeometry, floorMaterial); floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true; scene.add(floor);
+
+
+            // Load Engine Sound (V6 jaisa hi)
+            updateLoadingMessage('Loading Sound...');
+            audioLoader.load('carsound.mp3', ( buffer ) => { /* ... sound loading logic V6 jaisa hi ... */
+                 engineSound.setBuffer( buffer ); engineSound.setLoop( true ); engineSound.setVolume( 0 );
+                 try { engineSound.play(); console.log("Engine sound ready."); } catch (e) { console.warn("AudioContext couldn't start."); }
+                 soundLoaded = true; if (!assetsLoaded && loadingMessage) updateLoadingMessage('Loading Models...');
+            }, ( xhr ) => { if (!assetsLoaded && loadingMessage) updateLoadingMessage(`Loading Sound: ${Math.round(xhr.loaded / xhr.total * 100)}%`); },
+               ( err ) => { console.error( 'Error loading engine sound:', err ); if (!assetsLoaded && loadingMessage) updateLoadingMessage('Error Loading Sound'); soundLoaded = false; }
+            );
+
+            // Load Models (V6 jaisa hi)
+            const modelLoader = new GLTFLoader();
+            updateLoadingMessage('Loading City...');
+            modelLoader.load('city.glb', (gltf) => { /* ... city loading ... */
+                 cityModel = gltf.scene; cityModel.traverse(node => { if (node.isMesh) { node.castShadow = true; node.receiveShadow = true; } }); scene.add(cityModel); console.log("City loaded."); modelsLoaded.city = true; checkAllModelsLoaded();
+             }, (xhr) => { if(soundLoaded || !loadingMessage?.textContent.includes('Sound')) updateLoadingMessage(`Loading City: ${Math.round(xhr.loaded / xhr.total * 100)}%`); }, (error) => { console.error('Error loading city:', error); updateLoadingMessage('Error loading city!'); } );
+            updateLoadingMessage('Loading Car...');
+            modelLoader.load('red_car.glb', (gltf) => { /* ... car loading ... */
+                 carModel = gltf.scene; carModel.scale.set(0.5, 0.5, 0.5); carModel.position.copy(carInitialPosition); carModel.traverse(node => { if (node.isMesh) node.castShadow = true; }); scene.add(carModel); console.log("Car loaded."); modelsLoaded.car = true; checkAllModelsLoaded();
+             }, (xhr) => { if((modelsLoaded.city && soundLoaded) || !loadingMessage?.textContent.includes('City')) updateLoadingMessage(`Loading Car: ${Math.round(xhr.loaded / xhr.total * 100)}%`); }, (error) => { console.error('Error loading car:', error); updateLoadingMessage('Error loading car!'); });
+
+            // Setup Input Listeners
+            setupInputListeners();
+
+             // --- NEW: Add listener for camera toggle button ---
+             const cameraToggleBtn = document.getElementById('camera-toggle-btn');
+             if (cameraToggleBtn) {
+                // Resume audio context if this is the first interaction
+                const startAudio = () => {
+                    if (soundLoaded && listener.context.state === 'suspended') {
+                        listener.context.resume();
+                         console.log("AudioContext resumed on camera toggle.");
+                    }
+                    cameraToggleBtn.removeEventListener('click', startAudio);
+                    cameraToggleBtn.removeEventListener('touchstart', startAudio);
+                };
+                cameraToggleBtn.addEventListener('click', startAudio, { once: true });
+                cameraToggleBtn.addEventListener('touchstart', startAudio, { once: true });
+
+                // Add the main toggle functionality
+                 cameraToggleBtn.addEventListener('click', toggleCameraDistance);
+                 cameraToggleBtn.addEventListener('touchstart', (e) => { // Prevent double action on mobile
+                     e.preventDefault();
+                     toggleCameraDistance();
+                 });
+             } else {
+                 console.warn("Camera toggle button not found!");
+             }
+
+
+            window.addEventListener('resize', onWindowResize, false);
+            animate();
+        }
+
+        function setupInitialCamera() { /* ... V6 jaisa hi ... */
+            if (!carModel) return;
+            // Initial offset activeCameraOffset se hi set hoga jo ki normal hai
+            const offset = activeCameraOffset.clone().applyQuaternion(carModel.quaternion);
+            const targetPosition = carModel.position.clone().add(offset);
+            camera.position.copy(targetPosition);
+            camera.lookAt(carModel.position.clone().add(new THREE.Vector3(0, 1, 0)));
+        }
+
+        // --- NEW Function to Toggle Camera Distance ---
+        function toggleCameraDistance() {
+            const cameraToggleBtn = document.getElementById('camera-toggle-btn');
+            isCameraClose = !isCameraClose; // Toggle the state
+
+            if (isCameraClose) {
+                activeCameraOffset = cameraOffsetClose; // Set active offset to close
+                if (cameraToggleBtn) cameraToggleBtn.textContent = "Normal Cam"; // Update button text
+            } else {
+                activeCameraOffset = cameraOffsetNormal; // Set active offset to normal
+                if (cameraToggleBtn) cameraToggleBtn.textContent = "Close Cam"; // Update button text
+            }
+            console.log("Camera distance toggled. Close:", isCameraClose);
+             // Camera position update will happen smoothly via lerp in updateCamera()
+        }
+
+
+        function setupInputListeners() { /* ... V6 jaisa hi, including audio resume logic ... */
+            const acceleratorBtn = document.getElementById('accelerator'); const reverseBtn = document.getElementById('reverse');
+            const leftBtn = document.getElementById('left'); const rightBtn = document.getElementById('right');
+
+            const addControlListener = (element, controlKey) => {
+                const startAudio = () => { if (soundLoaded && listener.context.state === 'suspended') { listener.context.resume(); console.log("AudioContext resumed on control."); } element.removeEventListener('mousedown', startAudio); element.removeEventListener('touchstart', startAudio); };
+                element.addEventListener('mousedown', startAudio, { once: true }); element.addEventListener('touchstart', startAudio, { once: true });
+
+                element.addEventListener('mousedown', (e) => { e.preventDefault(); controls[controlKey] = true; });
+                element.addEventListener('touchstart', (e) => { e.preventDefault(); controls[controlKey] = true; }, { passive: false });
+                const endAction = (e) => { e.preventDefault(); controls[controlKey] = false; };
+                element.addEventListener('mouseup', endAction); element.addEventListener('mouseleave', endAction);
+                element.addEventListener('touchend', endAction); element.addEventListener('touchcancel', endAction);
+            };
+
+            addControlListener(acceleratorBtn, 'accelerate'); addControlListener(reverseBtn, 'reverse');
+            addControlListener(leftBtn, 'turnLeft'); addControlListener(rightBtn, 'turnRight');
+
+            window.addEventListener('keydown', (e) => { /* ... V6 jaisa ... */ switch(e.key.toLowerCase()) { case 'w': case 'arrowup': controls.accelerate = true; break; case 's': case 'arrowdown': controls.reverse = true; break; case 'a': case 'arrowleft': controls.turnLeft = true; break; case 'd': case 'arrowright': controls.turnRight = true; break; } });
+            window.addEventListener('keyup', (e) => { /* ... V6 jaisa ... */ switch(e.key.toLowerCase()) { case 'w': case 'arrowup': controls.accelerate = false; break; case 's': case 'arrowdown': controls.reverse = false; break; case 'a': case 'arrowleft': controls.turnLeft = false; break; case 'd': case 'arrowright': controls.turnRight = false; break; } });
+        }
+
+        function updateCarPhysics(deltaTime) { /* ... V6 jaisa hi ... */
+             if (!carModel || !assetsLoaded || deltaTime <= 0 || !cityModel) return;
+             let targetSteering = 0; if (controls.turnLeft) targetSteering = maxSteeringAngle; if (controls.turnRight) targetSteering = -maxSteeringAngle; let lerpFactorSteering = (targetSteering !== 0) ? steeringRate : steeringReturnRate; steeringAngle = THREE.MathUtils.lerp(steeringAngle, targetSteering, lerpFactorSteering * deltaTime); steeringAngle = THREE.MathUtils.clamp(steeringAngle, -maxSteeringAngle, maxSteeringAngle);
+             let currentAcceleration = 0; if (controls.accelerate) { currentAcceleration = acceleration; } else if (controls.reverse) { if (carSpeed > 0.1) { currentAcceleration = reverseAcceleration * 2.5; } else { currentAcceleration = reverseAcceleration; } } carSpeed += currentAcceleration * deltaTime;
+             let friction = Math.abs(carSpeed) * frictionCoefficient; carSpeed -= Math.sign(carSpeed) * friction * deltaTime; carSpeed = THREE.MathUtils.clamp(carSpeed, maxReverseSpeed, maxSpeed); if (Math.abs(carSpeed) < 0.1 && currentAcceleration === 0) { carSpeed = 0; }
+             let canMove = true; if (Math.abs(carSpeed) > 0.01 && collisionObjects.length > 0) { const moveDirection = new THREE.Vector3(0, 0, 1).applyQuaternion(carModel.quaternion).normalize(); let rayOriginOffset = moveDirection.clone(); let rayDirection = moveDirection.clone(); if (carSpeed > 0) { rayOriginOffset.multiplyScalar(collisionRayOffset); } else { rayOriginOffset.multiplyScalar(-collisionRayOffset); rayDirection.multiplyScalar(-1); } const rayOrigin = carModel.position.clone().add(rayOriginOffset); raycaster.set(rayOrigin, rayDirection); raycaster.far = collisionThreshold; const intersects = raycaster.intersectObjects(collisionObjects, true); if (intersects.length > 0 && intersects[0].distance < collisionThreshold) { canMove = false; carSpeed = 0; } }
+             if (canMove && Math.abs(carSpeed) > 0.01) { const deltaRotation = steeringAngle * carSpeed * turnSensitivity * deltaTime * 0.1; carModel.rotation.y += deltaRotation; const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(carModel.quaternion); const displacement = forward.multiplyScalar(carSpeed * deltaTime); carModel.position.add(displacement); } carModel.position.y = carInitialPosition.y;
+        }
+
+        function updateAudio(deltaTime) { /* ... V6 jaisa hi ... */
+             if (!soundLoaded || !engineSound.isPlaying) return;
+             let targetVolume = 0; let targetPlaybackRate = minPlaybackRate; const currentSpeedAbs = Math.abs(carSpeed); const maxSpeedAbs = Math.max(maxSpeed, Math.abs(maxReverseSpeed));
+             if ((controls.accelerate && carSpeed >= 0) || (controls.reverse && carSpeed <= 0)) { targetVolume = THREE.MathUtils.mapLinear(currentSpeedAbs, 0, maxSpeedAbs, 0.1, maxVolume); targetPlaybackRate = THREE.MathUtils.mapLinear(currentSpeedAbs, 0, maxSpeedAbs, minPlaybackRate, maxPlaybackRate); } else if (currentSpeedAbs > 0.1) { targetVolume = THREE.MathUtils.mapLinear(currentSpeedAbs, 0, maxSpeedAbs, 0.05, maxVolume * 0.6); targetPlaybackRate = THREE.MathUtils.mapLinear(currentSpeedAbs, 0, maxSpeedAbs, minPlaybackRate, maxPlaybackRate * 0.8); } else { targetVolume = 0; targetPlaybackRate = minPlaybackRate; }
+             targetVolume = THREE.MathUtils.clamp(targetVolume, 0, maxVolume); targetPlaybackRate = THREE.MathUtils.clamp(targetPlaybackRate, minPlaybackRate, maxPlaybackRate);
+             const lerpFactor = Math.min(soundSmoothingFactor * deltaTime, 1.0);
+             let currentVolume = engineSound.getVolume(); engineSound.setVolume(THREE.MathUtils.lerp(currentVolume, targetVolume, lerpFactor));
+             let currentPlaybackRate = engineSound.getPlaybackRate(); engineSound.setPlaybackRate(THREE.MathUtils.lerp(currentPlaybackRate, targetPlaybackRate, lerpFactor));
+             if (targetVolume === 0 && engineSound.getVolume() < 0.01) { engineSound.setVolume(0); }
+        }
+
+        // --- Modified updateCamera Function ---
+        function updateCamera(deltaTime) {
+            if (!carModel || !assetsLoaded || deltaTime <= 0) return;
+
+            // Use the activeCameraOffset variable here!
+            const desiredPosition = carModel.position.clone()
+                .add(activeCameraOffset.clone().applyQuaternion(carModel.quaternion));
+
+            const lerpFactor = Math.min(cameraFollowSmoothness * deltaTime, 1.0);
+            camera.position.lerp(desiredPosition, lerpFactor);
+
+            // LookAt target can remain the same for simplicity, or adjust based on isCameraClose
+            const lookAtTarget = carModel.position.clone();
+            lookAtTarget.y += 1.5; // Adjust if needed for close view
+
+            camera.lookAt(lookAtTarget);
+        }
+
+        function onWindowResize() { /* ... V6 jaisa hi ... */
+            camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function animate() { /* ... V6 jaisa hi ... */
+            requestAnimationFrame(animate); const deltaTime = clock.getDelta();
+            if (assetsLoaded) {
+                updateCarPhysics(deltaTime);
+                updateCamera(deltaTime); // This will now use the active offset
+                updateAudio(deltaTime);
+            }
+            renderer.render(scene, camera);
+        }
+
+        init();
+
+    </script>
+</body>
+</html>
